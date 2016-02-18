@@ -1,0 +1,31 @@
+--Canadian Exchange Rate
+	(SELECT b.business_date, a.currency_code, a.exchange_type, a.effective_date, a.exchange_rate
+	FROM 	currency_rates a,
+		(Select sd.business_date 
+		From sa_store_day sd
+		Where sd.business_date between (next_day({?any_date_from_week},'MONDAY') -7) and 		
+		(next_day({?any_date_from_week},'MONDAY') -1)
+		and SD.STORE = 1006) b
+	WHERE 	a.exchange_type = 'O'
+		and a.currency_code = 'CAD'
+		and a.effective_date =
+			(SELECT MAX (effective_date)
+			FROM currency_rates c
+			WHERE c.currency_code = a.currency_code
+			and c.exchange_type = a.exchange_type
+			and c.effective_date <= b.business_date)) CR,
+
+--Upcharge Rate
+	(SELECT y.business_date, x.upcharge_type, x.effective_date, x.exchange_rate
+	FROM 	ws_rtl_upcrg_rate x,
+		(Select sd.business_date 
+		From sa_store_day sd
+		Where sd.business_date between (next_day({?any_date_from_week},'MONDAY') -7) and 		
+		(next_day({?any_date_from_week},'MONDAY') -1)
+		and SD.STORE = 1006) y
+	WHERE 	x.upcharge_type = 'INV'
+		and x.effective_date = 	
+			(SELECT max(effective_date)
+			FROM 	ws_rtl_upcrg_rate z	
+			WHERE 	z.upcharge_type = x.upcharge_type
+			and	z.effective_date <= y.business_date)) WR

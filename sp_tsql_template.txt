@@ -1,0 +1,206 @@
+USE [scuba_database]
+GO
+
+-- ===============================================================
+-- Author:      Steve Grunert
+-- Create date: February 13, 2016
+-- Description: NOAA ocean buoy data aggregation.
+-- ===============================================================
+-- Change Log:
+-- Date       By        Ticket       Description
+-- 20160213   SGrunert  N/A          New procedure.
+-- 20160215   SGrunert  9876         Changed avg_MWD rounding to 0.
+-- ===============================================================
+
+
+IF (object_id('NOAA_buoy_data_agg')) is NOT NULL DROP PROCEDURE NOAA_buoy_data_agg
+
+
+CREATE PROCEDURE NOAA_buoy_data_agg
+(
+    @start_date INT     --As a numeric YYYYMMDD.
+    ,@end_date INT      --As a numeric YYYYMMDD.
+)
+
+AS
+
+-- =============================================
+-- SET Statements
+-- =============================================
+
+    SET NOCOUNT ON;
+    SET ANSI_NULLS ON;
+    SET ANSI_PADDING ON;
+
+
+-- =============================================
+-- DECLARE Local Variables
+-- =============================================
+
+DECLARE
+    @ErrorMessage NVARCHAR(4000)
+    ,@ErrorSeverity INT
+    ,@ErrorState INT
+
+
+BEGIN TRY
+
+-- =============================================
+-- EXTRACT: Gather data subsets from sources.
+-- =============================================
+
+--Get buoy data subset from the fact table.
+
+IF (object_id('#temp_buoy_data')) is NOT NULL DROP TABLE #temp_buoy_data
+
+SELECT
+    buoy    as buoy_id      --NOAA buoy id.
+    ,year
+    ,month
+    ,day
+    ,WVHT   as WVHT_m       --Wave height in meters.
+    ,MWD                    --Wave direction in compass degrees.
+    ,WTMP   as WTMP_deg_c   --Water temperature degrees centigrade.
+INTO
+    #temp_buoy_data
+FROM
+    noaa_buoy_fact    (nolock)
+WHERE
+    10000*year + month*100 + day >= @start_date 
+    and 10000*year + month*100 + day <= @end_date
+
+--Get buoy attributes subset from the dim table.
+
+IF (object_id('#temp_buoy_desc')) is NOT NULL DROP TABLE #temp_buoy_desc
+
+SELECT
+    buoy    as buoy_id      --NOAA buoy id.
+    ,name
+    ,latitude
+    ,longitude
+INTO
+    #temp_buoy_desc
+FROM
+    noaa_buoy_dim    (nolock)
+WHERE
+    buoy in (Select buoy_id From #temp_buoy_data Group By buoy_id)
+
+
+-- =============================================
+-- TRANSFORM: Manipulate data to new form.
+-- =============================================
+
+--Aggregate buoy data into maximimums, minimums, and averages, with WHERE clause outlier filters.
+
+IF (object_id('#temp_buoy_agg')) is NOT NULL DROP TABLE #temp_buoy_agg
+
+SELECT
+    data.buoy_id
+    ,desc.buoy_name
+    ,desc.latitude
+    ,desc.longitude
+    ,data.year
+    ,data.month
+    ,data.day
+    ,round((max(data.WVHT_m)*3.281),2)         as max_WVHT_ft
+    ,round((avg(data.WVHT_m)*3.281),2)         as avg_WVHT_ft
+    ,round((min(data.WVHT_m)*3.281),2)         as min_WVHT_ft
+    --,round(avg(data.MWD),1)                    as avg_MWD
+	,round(avg(data.MWD),0)                    as avg_MWD          --T9876 SAG 2/15/16
+    ,round((max(data.WTMP_deg_c)*9/5+32),1)    as max_WTMP_deg_f
+    ,round((avg(data.WTMP_deg_c)*9/5+32),1)    as avg_WTMP_deg_f
+    ,round((min(data.WTMP_deg_c)*9/5+32),1)    as min_WTMP_deg_f
+INTO
+    #temp_buoy_agg
+FROM
+    #temp_buoy_data    data
+    Inner Join #temp_buoy_desc    desc
+        On data.buoy_id = desc.buoy_id
+WHERE
+    data.WVHT_m >= 0 and data.WVHT_m <= 20	--Remove wave height outliers.
+    and data.MWD >= 0 and data.MWD <= 360	--Remove wave direction outliers.
+    and data.WTMP_c >= 0 and data.WTMP_c <= 30	--Remove water temperature outliers.
+GROUP BY
+    data.buoy_id
+    ,desc.buoy_name
+    ,desc.latitude
+    ,desc.longitude
+    ,data.year
+    ,data.month
+    ,data.day
+
+
+-- =================================================
+-- LOAD: Deliver data to the destination data store.
+-- =================================================
+
+--Order, convert date, add code, and insert into destionation table.
+
+INSERT INTO NOAA_buoy_agg
+    (buoy_id
+    ,buoy_name
+    ,latitude
+    ,longitude
+    ,year
+    ,month
+    ,day
+    ,date
+    ,max_WVHT_ft
+    ,avg_WVHT_ft
+    ,min_WVHT_ft
+    ,avg_MWD
+    ,code_MWD
+    ,max_WTMP_deg_f
+    ,avg_WTMP_deg_f
+    ,min_WTMP_deg_f)
+SELECT
+    buoy_id
+    ,buoy_name
+    ,latitude
+    ,longitude
+    ,year
+    ,month
+    ,day
+    ,cast(convert(varchar, 10000*year + month*100 + day) as DATETIME)
+    ,max_WVHT_ft
+    ,avg_WVHT_ft
+    ,min_WVHT_ft
+    ,avg_MWD
+    ,CASE When avg_MWD >= 337.5 and avg_MWD <= 360  Then 'N'
+          When avg_MWD >= 0     and avg_MWD < 22.5  Then 'N'
+          When avg_MWD >= 22.5  and avg_MWD < 67.5  Then 'NE'
+          When avg_MWD >= 67.5  and avg_MWD < 112.5 Then 'E'
+          When avg_MWD >= 112.5 and avg_MWD < 157.5 Then 'SE'
+          When avg_MWD >= 157.5 and avg_MWD < 202.5 Then 'S'
+          When avg_MWD >= 202.5 and avg_MWD < 247.5 Then 'SW'
+          When avg_MWD >= 247.5 and avg_MWD < 292.5 Then 'W'
+          When avg_MWD >= 292.5 and avg_MWD < 337.5 Then 'NW'
+          Else 'N/A' END                            as code_MWD
+    ,max_WTMP_deg_f
+    ,avg_WTMP_deg_f
+    ,min_WTMP_deg_f
+FROM
+    #temp_buoy_agg
+ORDER BY
+    buoy_id
+    ,year
+    ,month
+    ,day
+
+
+END TRY
+
+-- =============================================
+-- ERROR HANDLING: Display errors.
+-- =============================================
+
+BEGIN CATCH
+ 
+SELECT  @ErrorMessage = ERROR_MESSAGE(),
+        @ErrorSeverity = ERROR_SEVERITY(),
+        @ErrorState = ERROR_STATE()
+ 
+RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState)
+ 
+END CATCH
+

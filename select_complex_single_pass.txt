@@ -1,0 +1,646 @@
+SELECT
+-----------------------------------------------------------------------------------------
+-------------------------------------DESCRIPTION-----------------------------------------
+--This query was created to UNION together the separate data cases for price changes  
+--including promotion prices, clearance prices, and permanent price changes. The users
+--lump together these three distinct cases into a single business case called a price 
+--change. RMS columns were renamed to match RDW column names to avoid having to alter  
+--the standard RDW formula. --S. Grunert 7/9/07
+-----------------------------------------------------------------------------------------
+-----------------------------------Change History----------------------------------------
+--ID-------Author-----------Date------------Comments-------------------------------------
+--SG00-----S. Grunert-------7/9/07----------Oracle version created minus RDW DBLink------
+-----------------------------------------------------------------------------------------
+
+
+/*************************PROMOTIONAL PRICE CHANGE CASE******************************/
+
+       /*+ ordered*/
+       TO_CHAR(wpcqry.channel_id) 		"CHANNEL_ID",
+       wpcqry.channel_name 			"CHANNEL_NAME",
+       'Promotion'		                "PRICE_CHANGE_TYPE",
+       CASE wpcqry.price_change_status
+          WHEN 'W'
+             THEN 'Worksheet'
+          WHEN 'S'
+             THEN 'Submitted'
+          WHEN 'A'
+             THEN 'Approved'
+          WHEN 'R'
+             THEN 'Rejected'
+          WHEN 'C'
+             THEN 'Canceled'
+          WHEN 'D'
+             THEN 'Deleted'
+          WHEN 'E'
+             THEN 'Extracted'
+          WHEN 'M'
+             THEN 'Completed'
+          WHEN 'O'
+             THEN 'Completed'
+          WHEN 'I'
+             THEN 'S/A In Progress'
+       END 					"PRICE_CHANGE_STATUS",
+       wpcqry.price_change_id 			"PRICE_CHANGE_ID", 
+       wpcqry.price_change_desc 		"PRICE_CHANGE_DESC",
+       wpcqry.dept				"DEPT",
+       TO_CHAR (wpcqry.start_date, 'mm/dd/yy') 	"START_DATE",
+       TO_CHAR (wpcqry.end_date, 'mm/dd/yy') 	"END_DATE",
+       TO_CHAR (wpcqry.create_date, 'mm/dd/yy')  "CREATE_DATE",
+       wpcqry.collection 			"COLLECTION",
+       wpcqry.item 				"ITEM", 
+       wpcqry.item_desc 			"ITEM_DESC",
+       wpcqry.currency_code 			"CURRENCY_CODE",
+       wpcqry.exchange_rate 			"EXCHANGE_RATE",
+       wpcqry.zone_unit_retail  		"LAST_REGULAR_RETAIL_PRICE",
+       CASE wpcqry.zone_unit_retail
+           WHEN 0 THEN NULL
+           ELSE
+           ((wpcqry.zone_unit_retail - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate)) / wpcqry.zone_unit_retail)* 100 
+           END					"LAST_REGULAR_MU%",
+       NULL 				        "CURRENT_RETAIL_PRICE", 
+       NULL 				        "CURRENT_MU%",
+       DECODE (wpcqry.prom_change_type,
+               'NP', wpcqry.prom_change_amt,
+               'MA', decode(wpcqry.adjust_type,
+	           'EI',floor(wpcqry.zone_unit_retail - wpcqry.prom_change_amt) + (wpcqry.ends_in/100)
+		   ,(wpcqry.zone_unit_retail - wpcqry.prom_change_amt),
+               'PC', decode(wpcqry.adjust_type,
+	           'EI',floor(wpcqry.zone_unit_retail - (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 100)))
+	           + (wpcqry.ends_in/100) ,(wpcqry.zone_unit_retail - (wpcqry.zone_unit_retail * 
+                   (wpcqry.prom_change_amt / 100)))),
+               'CM', -999999,
+               wpcqry.zone_unit_retail
+              ) 				"NEW_RETAIL_PRICE",
+ 	CASE
+            WHEN  (wpcqry.zone_unit_retail = 0 or wpcqry.prom_change_amt = 0 or (wpcqry.zone_unit_retail - 
+                   wpcqry.prom_change_amt) = 0 )
+            THEN NULL
+            ELSE
+            DECODE (wpcqry.prom_change_type,
+               'NP', ((wpcqry.prom_change_amt- (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/wpcqry.prom_change_amt),
+               'MA', decode(wpcqry.adjust_type,
+                    'EI', (((floor(wpcqry.zone_unit_retail - wpcqry.prom_change_amt) + (wpcqry.ends_in/100)) 
+		     - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/
+		     (floor(wpcqry.zone_unit_retail - wpcqry.prom_change_amt)+ (wpcqry.ends_in/100))),
+                     (((wpcqry.zone_unit_retail - wpcqry.prom_change_amt) - (rdwqry.f_i_cost_amt / 
+                     wpcqry.exchange_rate))/(wpcqry.zone_unit_retail - wpcqry.prom_change_amt))),
+               'PC', decode(wpcqry.adjust_type,
+                    'EI', (((floor( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 100))) 
+                     + (wpcqry.ends_in/100)) - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/ 
+                     (floor( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 100)))
+                     + (wpcqry.ends_in/100)))),((( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail
+                     * (wpcqry.prom_change_amt / 100))) - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/ 
+                     ( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 100)))),
+               'CM', NULL,
+                ((wpcqry.zone_unit_retail- (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/wpcqry.zone_unit_retail) ) * 100 
+            END				          "NEW_MU%", 
+       CASE wpcqry.zone_unit_retail
+            WHEN 0 THEN NULL
+            ELSE
+            DECODE (wpcqry.prom_change_type,
+               'NP', ((wpcqry.prom_change_amt / wpcqry.zone_unit_retail) - 1)* 100,
+               'MA', decode(wpcqry.adjust_type,
+                   'EI', (((floor(wpcqry.zone_unit_retail - wpcqry.prom_change_amt) + (wpcqry.ends_in/100)) 
+		    / wpcqry.zone_unit_retail) - 1)* 100, (((wpcqry.zone_unit_retail - wpcqry.prom_change_amt) /
+                    wpcqry.zone_unit_retail) - 1)*100),
+               'PC',  decode(wpcqry.adjust_type,
+                   'EI', (((floor( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 
+                    100))) + (wpcqry.ends_in/100))  / wpcqry.zone_unit_retail) - 1)* 100,
+                    ((( wpcqry.zone_unit_retail- (wpcqry.zone_unit_retail * (wpcqry.prom_change_amt / 
+                    100))) / wpcqry.zone_unit_retail) - 1)* 100),
+               'CM', NULL,
+                NULL
+              )
+            END    			"%_OFF_LAST_REGULAR_PRICE",
+       wpcqry.prom_desc  		"PRICE_CHANGE_DESC", 
+       NULL 				"MARKDOWN_$",
+       rdwqry.f_i_soh_qty 		"F_I_SOH_QTY",
+       rdwqry.f_i_on_ord_qty 		"F_I_ON_ORD_QTY", 
+       wpcqry.create_id 		"CREATE_ID",
+       wpcqry.approval_id 		"APPROVAL_ID"
+FROM
+(SELECT	/*+ ordered */ 
+       s.channel_id			"CHANNEL_ID",
+       chs.channel_name			"CHANNEL_NAME",
+       chs.channel_type		        "CHANNEL_TYPE",
+       ph.status			"PRICE_CHANGE_STATUS",
+       ph.promotion			"PRICE_CHANGE_ID",
+       ph.prom_name			"PRICE_CHANGE_DESC",
+       im.dept				"DEPT",
+       ph.start_date			"START_DATE",
+       ph.end_date			"END_DATE",
+       ph.create_date			"CREATE_DATE",
+       DECODE(wia.collection, NULL, 'N/A',
+             (SELECT collection_desc FROM wsi_collection wc
+              WHERE wc.collection = wia.collection))  "COLLECTION",
+       ps.item				"ITEM", 
+       im.item_desc			"ITEM_DESC",
+       decode(s.state,'PR', 'US-PR',ph.currency_code)	"CURRENCY_CODE",
+       cr.exchange_rate			"EXCHANGE_RATE",
+       izp.unit_retail			"ZONE_UNIT_RETAIL",
+       ps.change_type			"PROM_CHANGE_TYPE",
+       ps.change_amt			"PROM_CHANGE_AMT",
+       ps.adjust_type			"ADJUST_TYPE", 
+       ps.ends_in			"ENDS_IN", 
+       ph.prom_desc			"PROM_DESC", 
+       ph.create_id			"CREATE_ID",
+       ph.approval_id			"APPROVAL_ID"
+  FROM    
+      promhead ph,
+       (SELECT  /*+ ordered*/    /*************SIMPLE-COMPLEX PROMOTION SUBQUERY**********/
+                psk.promotion		"PROMOTION"
+                ,psk.item		"ITEM"
+                ,psk.change_type	"CHANGE_TYPE"
+                ,psk.change_amt		"CHANGE_AMT"
+		,psk.adjust_type	"ADJUST_TYPE"
+		,psk.ends_in		"ENDS_IN"
+        FROM  PROMSKU psk
+              ,PROMHEAD phd
+        WHERE
+		phd.promotion = psk.promotion
+	        AND NVL(psk.status, '99') NOT IN ('DI', 'DP')
+                AND phd.status <> 'W'
+                AND phd.start_date 
+                    BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) 
+                    AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+      UNION
+         SELECT mg.promotion		"PROMOTION"
+                ,mg.item		"ITEM"
+                ,'CM'			"CHANGE_TYPE"
+                ,NULL			"CHANGE_AMT"
+		,NULL			"ADJUST_TYPE"
+		,NULL			"ENDS_IN"
+         FROM  PROM_MIX_MATCH_GET mg
+               ,PROMHEAD phd
+         WHERE
+	        phd.promotion = mg.promotion
+                AND phd.status  <> 'W' 
+                AND phd.start_date 
+                    BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) 
+                    AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+      UNION
+         SELECT mb.promotion		"PROMOTION"
+                ,mb.item		"ITEM"
+                ,'CM'			"CHANGE_TYPE"
+                ,NULL			"CHANGE_AMT"
+		,NULL			"ADJUST_TYPE"
+		,NULL			"ENDS_IN"
+         FROM  PROM_MIX_MATCH_BUY mb
+               ,PROMHEAD phd
+         WHERE
+	        phd.promotion = mb.promotion
+                AND phd.status  <> 'W'
+                AND phd.start_date 
+                    BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) 
+                    AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+      UNION
+         SELECT pts.promotion		"PROMOTION"
+                ,pts.item		"ITEM"
+                ,'CM'			"CHANGE_TYPE"
+                ,NULL			"CHANGE_AMT"
+		,NULL			"ADJUST_TYPE" 
+		,NULL			"ENDS_IN" 
+         FROM  PROM_THRESHOLD_SKU pts 
+               ,PROMHEAD phd
+          WHERE
+	        phd.promotion = pts.promotion
+                AND phd.status  <> 'W'
+                AND phd.start_date 
+                    BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) 
+                    AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)) ps,
+       promstore pst,
+       item_master im,
+       item_zone_price izp,
+       item_loc il,
+       price_zone_group_store pzgs,
+       wsi_item_attr wia,
+       STORE s,
+       channels chs, 		   
+	    (SELECT crs.exchange_rate, pzs.zone_id, pzs.zone_group_id FROM 
+	        (select currency_code, exchange_type, effective_date, exchange_rate 
+	        from currency_rates a
+	        where 
+	        a.EFFECTIVE_DATE = (Select max(effective_date) from currency_rates b where
+ 	        a.CURRENCY_CODE = b.CURRENCY_CODE
+	        and a.EXCHANGE_TYPE = b.exchange_type)) crs, 
+	      price_zone pzs
+            WHERE pzs.currency_code = crs.currency_code
+            AND crs.exchange_type = 'O')  cr
+ WHERE ph.promotion = ps.promotion
+       AND ph.status  <> 'W'
+       AND ph.promotion = pst.promotion
+       AND pst.STORE = pzgs.STORE
+       AND pzgs.STORE = s.STORE
+       AND s.channel_id = {?channel}
+       AND s.channel_id = chs.channel_id
+       AND ps.item = im.item
+       AND im.item = wia.item
+       AND izp.zone_group_id = pzgs.zone_group_id
+       AND izp.zone_id = pzgs.zone_id
+       AND cr.zone_group_id = pzgs.zone_group_id
+       AND cr.zone_id = pzgs.zone_id
+       AND im.item = izp.item
+       AND il.loc = pzgs.STORE
+       AND il.item = im.item
+       AND im.dept = decode({?dept}, 0 , im.dept, {?dept})
+       AND ph.start_date 
+           BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7)
+           AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+ GROUP BY
+       s.channel_id,
+       chs.channel_name,
+       chs.channel_type,
+       ph.status,
+       ph.promotion,
+       ph.prom_name,
+       im.dept,
+       ph.start_date,
+       ph.end_date,
+       ph.create_date,
+       wia.collection,
+       ps.item, 
+       im.item_desc,
+       decode(s.state,'PR', 'US-PR',ph.currency_code), 
+       cr.exchange_rate,
+       izp.unit_retail,
+       ps.change_type,
+       ps.change_amt,
+       ps.adjust_type,  
+       ps.ends_in,
+       ph.prom_desc, 
+       ph.create_id,
+       ph.approval_id)  wpcqry,
+       (SELECT  mii.item
+	  	,nvl(mii.on_hand,0)             F_I_SOH_QTY		
+		,nvl(Decode(mii.unit_cost, NULL, mie.unit_cost + mie.est_exp_value + mie.est_assess_value, 
+			    0, mie.unit_cost + mie.est_exp_value + mie.est_assess_value,
+		            mii.unit_cost),0)   F_I_COST_AMT
+		,nvl(mii.qty_ordered,0)         F_I_ON_ORD_QTY		
+		,mii.channel_type
+	FROM  mv_item_elc mie
+	      ,mv_item_inventory mii
+	WHERE mie.item(+) = mii.item
+	      and mii.channel_id = {?channel}
+	  ) rdwqry  
+WHERE 
+       rdwqry.channel_type = wpcqry.channel_type
+       AND rdwqry.item = wpcqry.item
+
+UNION ALL
+
+
+/*************************CLEARANCE PRICE CHANGE CASE******************************/
+
+SELECT /*+ ordered*/ 
+       TO_CHAR(wpcqry.channel_id) 		"CHANNEL_ID",
+       wpcqry.channel_name 			"CHANNEL_NAME",
+       'Clearance'			        "PRICE_CHANGE_TYPE",
+       CASE wpcqry.price_change_status
+          WHEN 'W'
+             THEN 'Worksheet'
+          WHEN 'S'
+             THEN 'Submitted'
+          WHEN 'A'
+             THEN 'Approved'
+          WHEN 'R'
+             THEN 'Rejected'
+          WHEN 'C'
+             THEN 'Canceled'
+          WHEN 'D'
+             THEN 'Deleted'
+          WHEN 'E'
+             THEN 'Extracted'
+          WHEN 'M'
+             THEN 'Completed'
+          WHEN 'O'
+             THEN 'Completed'
+          WHEN 'I'
+             THEN 'S/A In Progress'
+       END 					"PRICE_CHANGE_STATUS",
+       wpcqry.price_change_id 			"PRICE_CHANGE_ID", 
+       wpcqry.price_change_desc 		"PRICE_CHANGE_DESC",
+       wpcqry.dept				"DEPT",
+       TO_CHAR (wpcqry.start_date, 'mm/dd/yy') 	"START_DATE",
+       TO_CHAR (wpcqry.end_date, 'mm/dd/yy') 	"END_DATE",
+       TO_CHAR (wpcqry.create_date, 'mm/dd/yy') "CREATE_DATE",
+       wpcqry.collection 			"COLLECTION",
+       wpcqry.item 				"ITEM", 
+       wpcqry.item_desc 			"ITEM_DESC",
+       wpcqry.currency_code 			"CURRENCY_CODE",
+       wpcqry.exchange_rate 			"EXCHANGE_RATE",
+       wpcqry.zone_unit_retail 			"LAST_REGULAR_RETAIL_PRICE",
+       CASE wpcqry.zone_unit_retail
+           WHEN 0 THEN NULL
+           ELSE
+           ((wpcqry.zone_unit_retail - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/
+           wpcqry.zone_unit_retail)* 100 
+           END 					"LAST_REGULAR_MU%",
+       CASE wpcqry.clear_ind
+           WHEN 'Y' THEN wpcqry.loc_unit_retail
+           WHEN 'N' THEN wpcqry.zone_unit_retail
+           END                                   "CURRENT_RETAIL_PRICE",
+       CASE wpcqry.clear_ind
+           WHEN 'Y' THEN  (CASE  wpcqry.loc_unit_retail
+                           WHEN 0 THEN NULL
+                           ELSE ((( wpcqry.loc_unit_retail - (rdwqry.f_i_cost_amt / 
+                           wpcqry.exchange_rate))/ wpcqry.loc_unit_retail))* 100  
+                           END)
+           WHEN 'N' THEN  (CASE  wpcqry.zone_unit_retail
+                           WHEN 0 THEN NULL
+                           ELSE (((wpcqry.zone_unit_retail - (rdwqry.f_i_cost_amt /
+                           wpcqry.exchange_rate))/ wpcqry.zone_unit_retail))* 100 
+                           END)
+          END					"CURRENT_MU%",
+       wpcqry.new_unit_retail                   "NEW_RETAIL_PRICE",
+       CASE wpcqry.new_unit_retail
+           WHEN 0 THEN NULL
+           ELSE (((  wpcqry.new_unit_retail - (rdwqry.f_i_cost_amt /
+           wpcqry.exchange_rate) )/ wpcqry.new_unit_retail )) * 100
+           END					"NEW_MU%",
+       CASE wpcqry.zone_unit_retail
+           WHEN 0 THEN NULL
+           ELSE ((wpcqry.new_unit_retail / wpcqry.zone_unit_retail) - 1)* 100 
+           END 					"%_OFF_LAST_REGULAR_PRICE",
+       'N/A' 					"PRICE_CHANGE_DESC",
+       (wpcqry.new_unit_retail - wpcqry.zone_unit_retail)* (rdwqry.f_i_soh_qty + rdwqry.f_i_on_ord_qty)    "MARKDOWN_$",
+       rdwqry.f_i_soh_qty 			"F_I_SOH_QTY",
+       rdwqry.f_i_on_ord_qty 			"F_I_ON_ORD_QTY", 
+       wpcqry.create_id 			"CREATE_ID",
+       wpcqry.approval_id 			"APPROVAL_ID"
+FROM
+(SELECT /*+ ordered */ 
+       s.channel_id			        "CHANNEL_ID",
+       chs.channel_name			        "CHANNEL_NAME",
+       chs.channel_type		                "CHANNEL_TYPE",
+       csh.status			        "PRICE_CHANGE_STATUS",
+       csh.clearance			        "PRICE_CHANGE_ID",
+       csh.clearance_desc		        "PRICE_CHANGE_DESC",
+       im.dept				        "DEPT",
+       csd.active_date			        "START_DATE",
+       (crc.reset_date-1)		        "END_DATE",
+       csh.create_date			        "CREATE_DATE",
+       DECODE(wia.collection, NULL, 'N/A',
+           (SELECT collection_desc FROM wsi_collection wc
+            WHERE wc.collection = wia.collection))  "COLLECTION",
+       csd.item				        "ITEM", 
+       im.item_desc			        "ITEM_DESC",
+       decode(s.state,'PR', 'US-PR',pz.currency_code)	"CURRENCY_CODE",
+       cr.exchange_rate			        "EXCHANGE_RATE",
+       il.clear_ind			        "CLEAR_IND",
+       il.unit_retail			        "LOC_UNIT_RETAIL",
+       izp.unit_retail			        "ZONE_UNIT_RETAIL",
+       csd.unit_retail			        "NEW_UNIT_RETAIL",
+       csh.create_id			        "CREATE_ID",
+       csh.approval_id			        "APPROVAL_ID"
+  FROM clear_susp_head csh,
+       clear_susp_detail csd,
+       clear_reset_calc crc,
+       item_master im,
+       item_zone_price izp,
+       item_loc il,
+       wsi_item_attr wia,
+       price_zone_group_store pzgs,
+       price_zone pz,
+	(SELECT crs.exchange_rate, pzs.zone_id, pzs.zone_group_id FROM 
+	     (select currency_code, exchange_type, effective_date, exchange_rate 
+	     from currency_rates a
+	     where 
+	     a.EFFECTIVE_DATE = (Select max(effective_date) from currency_rates b where
+ 	     a.CURRENCY_CODE = b.CURRENCY_CODE
+	     and a.EXCHANGE_TYPE = b.exchange_type)) crs, 
+	price_zone pzs
+        WHERE pzs.currency_code = crs.currency_code
+        AND crs.exchange_type = 'O')  cr,
+       STORE s,
+       channels chs  
+ WHERE csh.clearance = csd.clearance
+       AND csh.status  <> 'W'
+       AND csd.item = im.item
+       AND im.item = wia.item
+       AND im.dept = decode({?dept}, 0 , im.dept, {?dept})
+       AND csd.zone_group_id = pzgs.zone_group_id
+       AND csd.zone_id = pzgs.zone_id
+       AND csd.clearance = crc.clearance (+)
+       AND csd.item = crc.item (+)
+       AND csd.zone_group_id = crc.zone_group_id (+)
+       AND csd.zone_id = crc.zone_id (+)
+       AND im.item = il.item
+       AND pzgs.STORE = s.STORE
+       AND il.loc = pzgs.STORE
+       AND s.channel_id = {?channel}
+       AND s.channel_id = chs.channel_id
+       AND im.item = izp.item
+       AND csd.zone_group_id = izp.zone_group_id
+       AND csd.zone_id = izp.zone_id
+       AND pz.zone_group_id = izp.zone_group_id
+       AND pz.zone_id = izp.zone_id
+       AND pz.zone_group_id = cr.zone_group_id
+       AND pz.zone_id = cr.zone_id
+       AND csd.active_date 
+           BETWEEN (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) 
+           AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+ GROUP BY
+       s.channel_id,
+       chs.channel_name,
+       chs.channel_type,
+       csh.status,
+       csh.clearance,
+       csh.clearance_desc,
+       im.dept,
+       csd.active_date,
+       crc.reset_date,
+       csh.create_date,
+       wia.collection,
+       csd.item, 
+       im.item_desc,
+       decode(s.state,'PR', 'US-PR',pz.currency_code),
+       cr.exchange_rate,
+       izp.unit_retail,
+       il.clear_ind,
+       il.unit_retail,
+       csd.unit_retail,
+       csh.create_id,
+       csh.approval_id)    wpcqry,
+       (SELECT  mii.item
+	  	,nvl(mii.on_hand,0)             F_I_SOH_QTY		
+		,nvl(Decode(mii.unit_cost, NULL, mie.unit_cost + mie.est_exp_value + mie.est_assess_value, 
+			    0, mie.unit_cost + mie.est_exp_value + mie.est_assess_value,
+		            mii.unit_cost),0)   F_I_COST_AMT
+		,nvl(mii.qty_ordered,0)         F_I_ON_ORD_QTY		
+		,mii.channel_type
+	FROM  mv_item_elc mie
+	      ,mv_item_inventory mii
+	WHERE mie.item(+) = mii.item
+	      and mii.channel_id = {?channel}
+	  ) rdwqry  
+WHERE 
+       rdwqry.channel_type = wpcqry.channel_type
+       AND rdwqry.item = wpcqry.item 
+
+UNION ALL
+
+
+/*************************PERMANENT PRICE CHANGE CASE******************************/
+
+SELECT /*+ ordered*/ 
+       TO_CHAR(wpcqry.channel_id) 		"CHANNEL_ID",
+       wpcqry.channel_name 			"CHANNEL_NAME",
+       'Permanent'		                "PRICE_CHANGE_TYPE",
+       CASE wpcqry.price_change_status
+          WHEN 'W'
+             THEN 'Worksheet'
+          WHEN 'S'
+             THEN 'Submitted'
+          WHEN 'A'
+             THEN 'Approved'
+          WHEN 'R'
+             THEN 'Rejected'
+          WHEN 'C'
+             THEN 'Canceled'
+          WHEN 'D'
+             THEN 'Activated'
+          WHEN 'E'
+             THEN 'Extracted'
+          WHEN 'M'
+             THEN 'Completed'
+          WHEN 'O'
+             THEN 'Completed'
+          WHEN 'I'
+             THEN 'S/A In Progress'
+       END 					"PRICE_CHANGE_STATUS",
+       wpcqry.price_change_id 			"PRICE_CHANGE_ID", 
+       wpcqry.price_change_desc 		"PRICE_CHANGE_DESC",
+       wpcqry.dept				"DEPT",
+       TO_CHAR (wpcqry.start_date, 'mm/dd/yy') 	"START_DATE",
+       'N/A' 					"END_DATE",
+       TO_CHAR (wpcqry.create_date, 'mm/dd/yy')  "CREATE_DATE",
+       wpcqry.collection 			"COLLECTION",
+       wpcqry.item 				"ITEM", 
+       wpcqry.item_desc 			"ITEM_DESC",
+       wpcqry.currency_code 			"CURRENCY_CODE",
+       wpcqry.exchange_rate 			"EXCHANGE_RATE",
+       wpcqry.zone_unit_retail 			"LAST_REGULAR_RETAIL_PRICE",
+       CASE wpcqry.zone_unit_retail
+           WHEN 0 THEN NULL
+           ELSE ((wpcqry.zone_unit_retail - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/ wpcqry.zone_unit_retail)* 100 
+           END 				        "LAST_REGULAR_MU%",
+       NULL 				        "CURRENT_RETAIL_PRICE", 
+       NULL 				        "CURRENT_MU%",
+       wpcqry.new_unit_retail 			"NEW_RETAIL_PRICE",
+       CASE wpcqry.new_unit_retail
+           WHEN 0 THEN NULL
+           ELSE (((wpcqry.new_unit_retail - (rdwqry.f_i_cost_amt / wpcqry.exchange_rate))/ wpcqry.new_unit_retail))* 100 
+           END					"NEW_MU%",
+       CASE wpcqry.zone_unit_retail
+           WHEN 0 THEN NULL
+           ELSE ((wpcqry.new_unit_retail / wpcqry.zone_unit_retail) - 1)* 100 
+           END					"%_OFF_LAST_REGULAR_PRICE",
+       'N/A' 				        "PRICE_CHANGE_DESC", 
+       (wpcqry.new_unit_retail - wpcqry.zone_unit_retail)* (rdwqry.f_i_soh_qty + rdwqry.f_i_on_ord_qty)    "MARKDOWN_$",
+       rdwqry.f_i_soh_qty 		        "F_I_SOH_QTY",
+       rdwqry.f_i_on_ord_qty 		        "F_I_ON_ORD_QTY", 
+       wpcqry.create_id 		        "CREATE_ID",
+       wpcqry.approval_id 		        "APPROVAL_ID"
+FROM
+(SELECT /*+ ordered driving_si te(pd) */ 
+       s.channel_id			"CHANNEL_ID",
+       chs.channel_name			"CHANNEL_NAME",
+       chs.channel_type		        "CHANNEL_TYPE",
+       psh.status			"PRICE_CHANGE_STATUS",
+       psh.price_change			"PRICE_CHANGE_ID",
+       psh.price_change_desc		"PRICE_CHANGE_DESC",
+       im.dept				"DEPT",
+       psh.active_date			"START_DATE",
+       psh.create_date			"CREATE_DATE",
+       DECODE(wia.collection, NULL, 'N/A',
+             (SELECT collection_desc FROM wsi_collection wc
+             WHERE wc.collection = wia.collection))  "COLLECTION",
+       psd.item				"ITEM", 
+       im.item_desc			"ITEM_DESC",
+       decode(s.state,'PR', 'US-PR',pz.currency_code)	"CURRENCY_CODE",
+       cr.exchange_rate			"EXCHANGE_RATE",
+       izp.unit_retail			"ZONE_UNIT_RETAIL",
+       psd.unit_retail			"NEW_UNIT_RETAIL",
+       psh.create_id			"CREATE_ID",
+       psh.approval_id			"APPROVAL_ID"
+
+  FROM 
+       price_susp_head psh,
+       price_susp_detail psd,
+       item_master im,
+       item_zone_price izp,
+       item_loc iloc,
+       wsi_item_attr wia,
+       price_zone_group_store pzgs,
+       price_zone pz,
+       (SELECT crs.exchange_rate, pzs.zone_id, pzs.zone_group_id FROM 
+	    (select currency_code, exchange_type, effective_date, exchange_rate 
+	    from currency_rates a
+	    where 
+	    a.EFFECTIVE_DATE = (Select max(effective_date) from currency_rates b where
+ 	    a.CURRENCY_CODE = b.CURRENCY_CODE
+	    and a.EXCHANGE_TYPE = b.exchange_type)) crs, 
+       price_zone pzs
+       WHERE pzs.currency_code = crs.currency_code
+           AND crs.exchange_type = 'O')  cr,
+       STORE s,
+       channels chs   
+ WHERE psh.price_change = psd.price_change
+       AND psh.status  <> 'W'
+       AND psd.item = im.item
+       AND im.item = wia.item 
+       AND im.dept = decode({?dept}, 0 , im.dept, {?dept})
+       AND psd.zone_group_id = pzgs.zone_group_id
+       AND psd.zone_id = pzgs.zone_id
+       AND im.item = iloc.item
+       AND pzgs.STORE = s.STORE
+       AND iloc.loc = pzgs.STORE
+       AND s.channel_id = {?channel}
+       AND s.channel_id = chs.channel_id
+       AND im.item = izp.item
+       AND psd.zone_group_id = izp.zone_group_id
+       AND psd.zone_id = izp.zone_id
+       AND pz.zone_group_id = izp.zone_group_id
+       AND pz.zone_id = izp.zone_id
+       AND pz.zone_group_id = cr.zone_group_id
+       AND pz.zone_id = cr.zone_id
+       AND psh.active_date BETWEEN  (NEXT_DAY({?any_date_from_week},'SATURDAY') -7) AND (NEXT_DAY({?any_date_from_week},'SATURDAY') -1)
+ GROUP BY
+       s.channel_id,
+       chs.channel_name,
+       chs.channel_type,
+       psh.status,
+       psh.price_change,
+       psh.price_change_desc,
+       im.dept,
+       psh.active_date,
+       psh.create_date,
+       wia.collection,
+       psd.item, 
+       im.item_desc,
+       decode(s.state,'PR', 'US-PR',pz.currency_code),
+       cr.exchange_rate,
+       izp.unit_retail,
+       psd.unit_retail,
+       psh.create_id,
+       psh.approval_id ) wpcqry,
+       (SELECT  mii.item
+	  	,nvl(mii.on_hand,0)             F_I_SOH_QTY		
+		,nvl(Decode(mii.unit_cost, NULL, mie.unit_cost + mie.est_exp_value + mie.est_assess_value, 
+			    0, mie.unit_cost + mie.est_exp_value + mie.est_assess_value,
+		            mii.unit_cost),0)   F_I_COST_AMT
+		,nvl(mii.qty_ordered,0)         F_I_ON_ORD_QTY		
+		,mii.channel_type
+	FROM  mv_item_elc mie
+	      ,mv_item_inventory mii
+	WHERE mie.item(+) = mii.item
+	      and mii.channel_id = {?channel}
+	  ) rdwqry  
+ 
+WHERE 
+       rdwqry.channel_type = wpcqry.channel_type
+       AND rdwqry.item = wpcqry.item
+
+
+
